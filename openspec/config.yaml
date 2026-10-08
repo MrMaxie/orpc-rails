@@ -1,0 +1,40 @@
+schema: spec-driven
+
+context: |
+  orpc-rails is a Ruby gem for a simple integration between Ruby on Rails,
+  Zod, and oRPC.
+  Rails applications can expose endpoints as generated TypeScript contracts
+  using Zod, usable out of the box by frontend applications with an oRPC client.
+  Two usage modes must remain available:
+  - Contract export from conventional Rails endpoints, without adopting an
+    oRPC-style backend programming model.
+  - Optional oRPC-style request handling in Rails for users who want that model.
+  Keep the integration lightweight. Do not require additional runtime
+  dependencies beyond those necessary for the Rails/Zod/oRPC integration.
+  Development and test tooling is separate from runtime requirements.
+  Use Testcontainers for integration tests, including cross-language contract
+  and client compatibility checks against a Rails application.
+  Follow Ruby gem conventions: a focused public API, namespaced implementation,
+  explicit supported Ruby and Rails versions, semantic versioning, and a gemspec
+  that declares runtime and development dependencies separately and packages
+  only distribution files. Do not ship tests, generated test artifacts, or
+  workstation-specific content in the gem.
+  Project knowledge sources are public OpenSpec and a public CHANGELOG.md.
+  Use Arcantry's configuration-free discovery for these sources.
+  Maintain the changelog in Keep a Changelog format with Semantic Versioning.
+  Base release entries on accepted public OpenSpec outcomes; do not invent
+  release history or describe internal setup as consumer-facing changes.
+  Do not add Arcantry configuration, private knowledge sources, task queues,
+  or repository-local agent skills as part of this setup.
+
+rules:
+  proposal:
+    - Preserve both contract-export-only and optional oRPC-style Rails usage.
+    - Justify any new runtime dependency and keep scope focused on the Ruby gem.
+  design:
+    - Define the Ruby/Rails, Zod, and oRPC compatibility boundary explicitly.
+    - Describe contract generation and how client compatibility will
+      be verified.
+  tasks:
+    - Include Testcontainers integration coverage for changes to endpoint
+      exposure, contracts, or request handling.
