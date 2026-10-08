@@ -66,6 +66,7 @@ begin
       FileUtils.mkdir_p(rails)
       copy("test/fixtures/rails/Dockerfile", rails)
       copy("test/fixtures/rails/app.rb", rails)
+      copy("test/fixtures/rails/tasks_test.rb", rails)
       copy("test/fixtures/rails/Gemfile.#{target}", rails, "Gemfile")
       copy("test/fixtures/rails/Gemfile.#{target}.lock", rails, "Gemfile.lock")
       rails_image = "orpc-rails-test-#{target}:#{run_id}"

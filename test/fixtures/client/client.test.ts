@@ -69,6 +69,24 @@ test('exported validators detect broken real HTTP output and invalid input', asy
   assert.equal('destroy' in contract.widgets, false)
 })
 
+test('all generated schema nodes validate real wire JSON, omission and literals', async () => {
+  const result = await client.schema.show({})
+  const output = schemas['schema.show'].output
+  output.parse(result)
+  assert.equal(result.flavor, 'x"\\; globalThis.injected = true; // é')
+  assert.equal('injected' in globalThis, false)
+  assert.equal('nickname' in result, false)
+  assert.equal(result.note, null)
+  for (const invalid of [
+    { ...result, nickname: null }, { ...result, note: undefined },
+    { ...result, count: 1.5 }, { ...result, count: 9007199254740992 },
+    { ...result, amount: Infinity }, { ...result, amount: -1 },
+    { ...result, flag: 'true' }, { ...result, tag: 'wrong' },
+    { ...result, flavor: 'wrong' }, { ...result, items: [] },
+    { ...result, items: ['abcd'] }, { ...result, extra: true },
+  ]) assert.equal(output.safeParse(invalid).success, false)
+})
+
 function typeAssertions() {
   // @ts-expect-error path parameter is a wire string
   void client.widgets.show({ params: { id: 42 } })

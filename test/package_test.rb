@@ -33,6 +33,9 @@ class PackageTest < Minitest::Test
       assert_includes files, "CHANGELOG.md"
       assert files.all? { |file| file.start_with?("lib/") || %w[LICENSE README.md CHANGELOG.md].include?(file) }
       refute files.any? { |file| file.match?(%r{(?:test|spec|openspec|node_modules|vendor|\.local)/}) }
+      second = File.join(dir, "second.gem")
+      Dir.chdir(ROOT) { Gem::Package.build(spec, false, false, second) }
+      assert_equal files, Gem::Package.new(second).contents
       package.extract_files(File.join(dir, "installed"))
       output, status = Bundler.with_unbundled_env do
         Open3.capture2e(

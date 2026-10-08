@@ -59,9 +59,27 @@ class WidgetsController < ActionController::API
   end
 end
 
+class SchemaController < ActionController::API
+  include OrpcRails::Controller
+  S = OrpcRails::Schema
+  FLAVOR = 'x"\\; globalThis.injected = true; // é'
+
+  orpc_contract :show, key: "schema.show", method: :get, path: "/schema", success_status: 200,
+    input: S.object,
+    output: S.object(nickname: S.string.optional, note: S.string.nullable,
+      count: S.integer(min: 0, max: 10), amount: S.number(min: 0, max: 2), flag: S.boolean,
+      tag: S.literal("fixed"), flavor: S.enum(FLAVOR, "normal"),
+      items: S.array(S.string(min_length: 1, max_length: 3), min_length: 1, max_length: 2))
+
+  def show
+    render json: { note: nil, count: 2, amount: 1.5, flag: true, tag: "fixed", flavor: FLAVOR, items: ["ok"] }
+  end
+end
+
 FixtureApplication.initialize!
 Rails.application.routes.draw do
   get "/health", to: ->(_) { [200, { "content-type" => "application/json" }, ['{"ok":true}']] }
+  get "/schema", to: "schema#show"
   get "/widgets/:id", to: "widgets#show"
   post "/widgets", to: "widgets#create"
   delete "/widgets/:id", to: "widgets#destroy"
