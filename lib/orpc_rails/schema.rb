@@ -174,16 +174,17 @@ module OrpcRails
 
       def normalize_length(value, name)
         return nil if value.nil?
-        unless value.is_a?(Integer) && value >= 0
-          raise ArgumentError, "#{name} must be a non-negative Integer or nil"
+        unless value.is_a?(Integer) && value.between?(0, SAFE_INTEGER_MAX)
+          raise ArgumentError, "#{name} must be a non-negative safe Integer or nil"
         end
         value
       end
 
       def normalize_finite_number(value, name)
         return nil if value.nil?
-        unless (value.is_a?(Integer) || value.is_a?(Float)) && value.finite?
-          raise ArgumentError, "#{name} must be a finite number or nil"
+        unless (value.is_a?(Integer) && value.between?(SAFE_INTEGER_MIN, SAFE_INTEGER_MAX)) ||
+            (value.is_a?(Float) && value.finite?)
+          raise ArgumentError, "#{name} must be a finite Float or safe Integer or nil"
         end
         value
       end

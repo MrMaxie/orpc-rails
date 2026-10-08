@@ -38,6 +38,38 @@ class RoutesTest < Minitest::Test
     assert_raises(ArgumentError) { validator.validate!(endpoint(path: "/missing/:id")) }
   end
 
+  def test_preceding_routes_cannot_shadow_some_or_all_parameter_values
+    ["/widgets/special", "/widgets/:slug", "/widgets/*remaining", "/widgets/prefix*remaining", "/*remaining"].each do |earlier|
+      routes = ActionDispatch::Routing::RouteSet.new
+      routes.draw do
+        get earlier, to: "route_fixture#create"
+        get "/widgets/:id", to: "route_fixture#show"
+      end
+      error = assert_raises(ArgumentError) { OrpcRails::Routes.new(routes).validate!(endpoint) }
+      assert_includes error.message, "shadow"
+    end
+  end
+
+  def test_embedded_parameters_in_an_earlier_route_are_not_treated_as_literals
+    routes = ActionDispatch::Routing::RouteSet.new
+    routes.draw do
+      get "/widgets-:id", to: "route_fixture#create"
+      get "/widgets-special", to: "route_fixture#show"
+    end
+    assert_raises(ArgumentError) do
+      OrpcRails::Routes.new(routes).validate!(endpoint(path: "/widgets-special"))
+    end
+  end
+
+  def test_nonoverlapping_preceding_route_is_not_a_conflict
+    routes = ActionDispatch::Routing::RouteSet.new
+    routes.draw do
+      get "/other/:id", to: "route_fixture#create"
+      get "/widgets/:id", to: "route_fixture#show"
+    end
+    assert OrpcRails::Routes.new(routes).validate!(endpoint)
+  end
+
   def test_parameter_and_request_constraints_are_not_guessed
     validator = OrpcRails::Routes.new(@routes)
     assert_raises(ArgumentError) { validator.validate!(endpoint(path: "/limited/:id")) }

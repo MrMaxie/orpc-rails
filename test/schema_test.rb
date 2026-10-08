@@ -49,6 +49,13 @@ class SchemaTest < Minitest::Test
     assert_raises(ArgumentError) { S.number(min: 0..1) }
   end
 
+  def test_numeric_and_length_bounds_cannot_round_or_overflow_in_javascript
+    assert_raises(ArgumentError) { S.number(max: SAFE_MAX + 2) }
+    assert_raises(ArgumentError) { S.number(min: -(10**400)) }
+    assert_raises(ArgumentError) { S.string(max_length: SAFE_MAX + 2) }
+    assert_raises(ArgumentError) { S.array(S.string, min_length: SAFE_MAX + 2) }
+  end
+
   def test_integer_defaults_to_safe_integer_range
     assert_equal({ min: SAFE_MIN, max: SAFE_MAX }, S.integer.options)
   end
