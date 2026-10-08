@@ -4,7 +4,8 @@
 
 The gem SHALL provide opt-in procedures declaring a registered router key,
 input/output schemas, error schemas and Ruby handler. It SHALL require explicit
-Rails route mounting. Loading the gem or registering conventional controller
+Rails route mounting to a dedicated dispatch controller, with parameter
+wrapping disabled explicitly for that controller only. Loading the gem or registering conventional controller
 contracts MUST NOT mount an RPC route or invoke procedure behavior.
 
 #### Scenario: Export-only application needs no procedure server
@@ -20,13 +21,49 @@ contracts MUST NOT mount an RPC route or invoke procedure behavior.
 - **THEN** a valid POST to `/rpc/widgets/create` invokes that handler once
 - **AND** unrelated Rails routes keep their previous behavior
 
+### Requirement: RPC exports are explicit and isolated from HTTP contracts
+
+The gem SHALL provide `orpc:export_rpc[path,controller]` and
+`orpc:check_rpc[path,controller]` for one explicitly selected registered
+controller. They SHALL export its executable Zod schemas, v1 procedure
+`contract` and `Contract` type without HTTP route metadata or evaluating
+handlers/context. Existing HTTP export/check tasks SHALL retain their behavior.
+Each surface SHALL apply deterministic quoting, reserved-key/collision checks,
+atomic writes and non-writing drift checks independently.
+
+#### Scenario: Equal keys in different transports do not collide
+
+- **WHEN** a conventional HTTP controller and the selected RPC controller both
+  declare `widgets.create` and their respective export tasks run
+- **THEN** separate modules contain their own input/output contracts
+- **AND** the HTTP module keeps detailed HTTP mapping while the RPC module uses
+  ordinary `oc.input(...).output(...).errors(...)`
+
+#### Scenario: Export selects one controller without running application code
+
+- **WHEN** RPC export selects `RpcController` while another dispatch controller
+  also has declarations
+- **THEN** only the selected controller's declarations appear
+- **AND** no handler or context builder runs; duplicates within the selected
+  module fail without replacing the destination
+
+#### Scenario: RPC drift check is non-writing
+
+- **WHEN** a procedure/error declaration differs from the selected generated RPC
+  module or that destination is missing
+- **THEN** RPC check exits nonzero and leaves the destination bytes/mtime intact
+- **AND** it does not modify the HTTP contract
+
 ### Requirement: Rails callbacks and request context are preserved
 
 Dispatch SHALL run through the controller lifecycle and preserve application
 callbacks, authentication, authorization and CSRF policy. The gem MUST NOT
 skip protection or configure CORS automatically. Context SHALL be constructed
 for each allowed request, passed only to its handler and excluded from exports,
-responses and global registry state.
+responses and global registry state. Application middleware/callback/CSRF
+responses and exceptions before gem dispatch SHALL NOT be converted into gem
+protocol errors. The v1 envelope guarantee SHALL cover gem dispatch/codec
+failures after that phase, not earlier application processing.
 
 #### Scenario: Authentication denial prevents execution
 
@@ -47,14 +84,26 @@ responses and global registry state.
   invocation
 - **AND** a request with a valid token and credentials can invoke the handler
 
+#### Scenario: Malformed body is denied before dispatch
+
+- **WHEN** authentication denies a malformed request before dispatch, or a
+  callback/CSRF check fails while reading its Rails parameters
+- **THEN** Rails retains the application's denial or parse-error behavior
+- **AND** no procedure handler or context builder runs and no global ParseError
+  rescue replaces that response with a gem error
+
 ### Requirement: Ruby and Zod validate the same schema semantics
 
 Before execution, input SHALL satisfy the shared schema IR without coercion,
 unknown-key stripping or implicit defaults. Handler output SHALL satisfy its
 schema before a success response is sent. JSON hashes SHALL have string keys.
 Ruby and generated Zod SHALL agree on the supported nodes, numeric bounds,
-omission/null semantics and invalid values. Unsupported outputs MUST fail
-safely rather than stringify arbitrary Ruby objects.
+omission/null semantics and invalid values. String length bounds SHALL count
+Unicode code points without normalization, matching pinned Zod 4.6.5; array
+length bounds SHALL count elements. Wire-profile admission (bytes, depth,
+UTF-8 and safe numeric representation) SHALL be checked separately from IR
+validation. Unsupported outputs MUST fail safely rather than stringify
+arbitrary Ruby objects.
 
 #### Scenario: Invalid input cannot reach business logic
 
@@ -70,6 +119,21 @@ safely rather than stringify arbitrary Ruby objects.
 - **THEN** both accept the valid fixture and reject missing required or
   non-nullable null values identically
 
+#### Scenario: Unicode string bounds agree with the pinned Zod
+
+- **WHEN** Ruby and Zod evaluate max-length-1 strings containing U+1F600,
+  precomposed U+00E9, and `e` followed by U+0301
+- **THEN** both accept the first two and reject the combining sequence
+- **AND** neither uses UTF-16 unit counts, byte counts or implicit normalization
+
+#### Scenario: Wire limits do not silently change the schema IR
+
+- **WHEN** a finite value passes `S.number` / `z.number()` but is an integral
+  number outside the RPC safe-integer profile
+- **THEN** the RPC codec rejects it before handler invocation
+- **AND** shared IR conformance and conventional HTTP exports keep their finite
+  number semantics rather than acquiring hidden RPC-only constraints
+
 #### Scenario: Invalid output does not become success
 
 - **WHEN** a handler returns an object missing a required output field,
@@ -78,7 +142,10 @@ safely rather than stringify arbitrary Ruby objects.
 
 ### Requirement: Declared errors have validated typed data
 
-Procedures SHALL declare business-error codes with HTTP status and data schema.
+Procedures SHALL declare nonblank stable business-error codes with integer HTTP
+status 400..599 and a supported, non-optional-root data schema. A raised error
+helper SHALL supply code, public message and data; status SHALL come from its
+declaration rather than an arbitrary per-raise override.
 Only a declared raised error with conforming data SHALL be emitted as a defined
 v1 oRPC error. Unknown codes, invalid error data and unexpected exceptions
 SHALL become safe undefined internal errors. Internal response content MUST

@@ -9,8 +9,10 @@ request context and authentication.
 
 - Add opt-in Ruby procedures with declared input, output and business errors.
 - Mount a JSON-only, POST-only oRPC v1 RPC endpoint explicitly in Rails.
-- Validate input/output against the same schemas used by contract export.
-- Preserve Rails callbacks and per-request application context.
+- Add selected-controller RPC export/check tasks without changing HTTP exports.
+- Validate input/output against the shared IR plus explicit bounded wire rules.
+- Preserve Rails callbacks/CSRF and per-request context; keep earlier Rails
+  denials separate from gem dispatch/codec error envelopes.
 - Verify successful and failed calls with the official TypeScript `RPCLink`.
 
 ## Capabilities
@@ -29,7 +31,10 @@ None. This adds an optional layer without changing export-only requirements.
 
 Depends on [export-rails-contracts](../export-rails-contracts/proposal.md)
 for schemas, registry, generator and the gem/Testcontainers harness.
-Implement it only after that baseline passes acceptance.
+That baseline now passes packaged-gem acceptance on both locked Rails targets.
+The executable prerequisite gates probe pinned wire/parser/lifecycle behavior;
+they do not implement a gem RPC server. The next implementation gate is bounded
+strict JSON scanning, followed by one generated-contract procedure in TDD.
 
 Adds Ruby procedure/controller integration and a codec for the JSON subset of
 stable oRPC v1. Generated procedure contracts use the same Zod/oRPC imports;

@@ -2,8 +2,9 @@
 
 This change depends on the schema representation, registry/exporter and
 packaged-gem Testcontainers fixture from `export-rails-contracts`.
-The gem does not yet implement either change. This document proposes the
-optional second slice; conventional controller contracts remain usable alone.
+The export-only baseline is implemented and its packaged-gem acceptance passes
+on both locked Rails targets. Procedures are not implemented. This document
+proposes the optional second slice; conventional contracts remain usable alone.
 
 An ergonomic Ruby procedure DSL is not sufficient for compatibility with
 RPCLink: the route, serialization envelope, HTTP errors and typed error shape
@@ -35,6 +36,7 @@ schemas as export-only declarations. Proposed API shape:
 ```ruby
 class RpcController < ApplicationController
   include OrpcRails::Procedures
+  wrap_parameters false # dedicated RPC controller; never change other controllers
   before_action :authenticate_user!
 
   S = OrpcRails::Schema
@@ -59,6 +61,15 @@ Procedure declarations export standard `oc.input(...).output(...).errors(...)`
 contracts, without Rails HTTP route metadata masquerading as RPC transport.
 The caller supplies the mounted RPC prefix in `RPCLink` configuration.
 
+Keep exports separate: existing `orpc:export[path]` / `orpc:check[path]` remain
+HTTP-only. Add `orpc:export_rpc[path,controller]` and
+`orpc:check_rpc[path,controller]`, requiring one registered, named dispatch
+controller (for example `RpcController`). Each RPC module exports `contract`,
+`Contract` and `schemas` for that controller only. Equal keys in an HTTP module
+and an RPC module are allowed; collisions within one module are not. Reuse
+ordering/quoting/atomic-write/check mechanics, not HTTP `.route(...)` metadata.
+Export never evaluates a handler or context builder; neither is serialized.
+
 Require JSON-valued inputs and outputs with a schema; callers use an explicit
 empty object for no input and an explicit null schema/value for null output.
 The profile does not represent root `undefined`. Reuse the supported types
@@ -68,23 +79,51 @@ key dropping, default insertion or arbitrary predicates. The decoder produces
 string-keyed hashes; handlers return string-keyed JSON hashes, arrays and
 scalars, not ActiveRecord models or symbol-keyed hashes requiring guesswork.
 
+For the pinned Zod 4.6.5, string length bounds count Unicode code points, not
+UTF-16 units or grapheme clusters. Validate UTF-8 first and use Ruby character
+length; do not normalize combining sequences. Both sides accept a single
+U+1F600 at max length 1 and reject `e` plus U+0301 at that bound. Keep these as
+version-sensitive conformance cases, not an assumption about every Zod v4.
+
+Schema validation and transport admission are distinct. `S.number` describes
+finite numeric values; the RPC JSON profile additionally rejects any numeric
+value that is mathematically integral and outside the safe-integer range,
+including Float/exponent forms. A value can pass `z.number()` yet fail that
+wire policy, just as it can pass a schema but exceed the body-size limit.
+Cross-language IR conformance compares schema semantics separately from the
+additional profile checks. HTTP exports do not acquire RPC-only restrictions.
+
 Alternative: directly wrap arbitrary Rails actions as RPC procedures.
 Rejected because body parsing, return values, errors and schema validation
 would be implicit. Conventional actions retain the HTTP export-only path.
 
 ### 2. Dispatch through an explicitly mounted Rails controller
 
-Applications add an explicit POST route under a chosen RPC prefix to a
-controller dispatch action. No automatic mount on `require` or Railtie load.
+Applications mount one dedicated controller explicitly. To reach the same
+controller lifecycle for unsupported methods and empty procedure paths, use:
+
+```ruby
+# config/routes.rb — example prefix, owned by the application
+match "/rpc", to: "rpc#orpc_dispatch", via: :all, format: false
+match "/rpc/*orpc_path", to: "rpc#orpc_dispatch", via: :all, format: false
+```
+
+The transport still accepts POST only; `via: :all` permits its 405 response,
+not extra handler methods. `format: false` prevents a suffix becoming Rails
+format metadata. No automatic mount on `require` or Railtie load.
 The remainder of the path identifies a registered dotted key using slash
 segments (`/rpc/widgets/create` -> `widgets.create`). The route integration
 also returns 405 for other methods under that prefix without invoking a
-handler; it never hijacks unrelated application routes.
+handler after application callbacks allow dispatch; it never hijacks unrelated
+application routes. Callback denials take precedence over gem protocol errors.
 
 Only valid registered keys can dispatch. Reject unknown keys, empty or unsafe
 segments and encoded path ambiguities; never constantize a request value or
-send it as an arbitrary method name. Freeze registry snapshots after loading
-and replace registrations on Rails reload, not per request.
+send it as an arbitrary method name. Lookup is scoped to this dispatch
+controller, not every procedure in the application. Keys use the existing
+ASCII identifier/reserved-segment rules; reject percent-encoded segments,
+empty segments and dot segments rather than normalize them into another key.
+Freeze declarations and replace them on Rails reload, not per request.
 
 Use the Rails controller lifecycle instead of a Rack bypass so authentication,
 authorization and request-local helpers remain application-owned. The gem
@@ -93,10 +132,25 @@ Cookie-authenticated deployments retain their CSRF policy; API-mode deployments
 can choose their existing token policy. Tests exercise both callback denial and
 successful dispatch, including a CSRF-protected controller negative case.
 
-After callbacks allow dispatch, build context for that request only, decode
-and validate input, invoke the handler once, validate output and serialize.
-Context is not part of the exported contract or response. No request state
-may be retained in process-global declarations.
+After callbacks allow dispatch: check method/media/path, bound and decode the
+body, validate input, build context for this request, invoke the handler once,
+validate output/profile and serialize. Invalid input does not run the handler
+or context builder. Context is not part of the exported contract or response.
+No request state may be retained in process-global declarations.
+
+Raw-body probes through both Rails stacks show that `request.raw_post` is
+repeatable after valid parameter access, and malformed JSON can reach an
+API controller's action when callbacks do not access `params`. A callback
+that reads malformed JSON via `params` can instead fail before the action;
+CSRF enforcement likewise precedes it. Such earlier middleware/callback/CSRF
+responses and parse exceptions remain application-owned. The v1 envelope
+guarantee starts in gem dispatch/decoding, not outside that phase; do not
+install a global ParseError rescue or change Rails parameter parsers.
+
+Rails instrumentation may inspect the body before the action, even with
+parameter wrapping disabled. The gem's byte/depth checks protect its own
+codec and handler admission, not total memory/CPU used by earlier Rails or
+application processing. Deployment-level request limits remain separate.
 
 ### 3. Implement only the v1 JSON RPC envelope
 
@@ -109,7 +163,7 @@ Supported request profile:
 POST /rpc/widgets/create
 Content-Type: application/json
 
-{"json":{"name":"blue"},"meta":[]}
+{"json":{"name":"blue"}}
 ```
 
 `json` is required and can be any value admitted by the declared schema.
@@ -117,9 +171,28 @@ Content-Type: application/json
 unknown envelope keys, invalid JSON, invalid UTF-8, invalid envelope shapes,
 duplicate JSON keys and native/non-JSON values; do not silently discard them.
 Duplicate-key detection must happen before ordinary JSON parsing loses the
-ambiguity. The implementation gate must prove a bounded Ruby parser approach
-using standard libraries; do not claim duplicates are rejected by JSON.parse
-by default.
+ambiguity. Use a bounded standard-library `StringScanner` lexical prepass
+tracking object keys after escape decoding, structural depth and valid JSON
+tokens, followed by ordinary parsing. It must reject escaped-equivalent keys,
+comments, invalid escapes and trailing commas, not build a permissive JSONC
+reader. The scanner still needs implementation and adversarial tests.
+
+The locked matrix exposes incompatible parser conveniences: json 2.7.2 calls
+`object_class#[]=` for both duplicate members but ignores
+`allow_duplicate_key: false`; json 3.0.2 rejects duplicates natively but converts
+objects after parsing and calls that setter only once. Neither convenience is
+a uniform duplicate detector. For JSON 2.x explicitly disable
+`create_additions`; JSON 3 removed additions and rejects that option. Always
+use nonsymbolizing plain data parsing, no caller-supplied classes or hooks.
+Validate raw bytes as UTF-8 and every decoded key/string again; older parsers
+can admit malformed binary strings or lone low surrogates.
+
+The pinned default RPCLink omits empty request metadata. It accepts omitted
+or empty response metadata; the gem deliberately emits `meta: []`. Date,
+BigInt, NaN and undefined array entries produce metadata and stay unsupported.
+Root undefined becomes `{}` and is rejected for lacking `json`. Infinity can
+already have become JSON null before reaching Rails; the server cannot infer
+that origin. Client-side schema parsing is required to catch it before sending.
 
 Successful responses use HTTP 200, JSON content type and
 `{"json": <validated output>, "meta": []}`. This profile has no native types:
@@ -128,12 +201,23 @@ decimals and timestamps remain declared strings, just as in HTTP contracts.
 An actual default v1 RPCLink must succeed for valid JSON calls without custom
 serializers or a custom fetch adapter.
 
-Apply a configurable body-byte limit before decoding (default 1 MiB), bounded
-nesting (default 64), and reject nonfinite numbers and unsafe integers.
-A supported structured payload must satisfy these limits on input and output.
-Document limits in the public API. Parse without creating symbols from user
-keys, invoking constructors or evaluating metadata. An output outside the
-profile becomes a safe internal error, never partial success.
+Add controller-level `orpc_limits max_body_bytes: 1_048_576, max_nesting: 64`;
+these are the defaults. Require integer limits of at least 1024 bytes and
+3 nesting levels so the fixed safe error envelope fits even at minimum limits.
+The byte limit counts the complete UTF-8 wire envelope. Depth counts the outer
+object as level 1 and each nested array/object as another level: `json` holding
+63 nested arrays fits 64; 64 arrays does not. Apply the same convention to
+success and declared-error envelopes before sending. A scalar does not add a
+container level. Fixed protocol errors use bounded public messages and `{}`
+data, never a recursively failing application-output validator.
+
+Check size before gem decoding, including bodies with absent/misleading
+Content-Length; do not trust that header as the sole oracle. Decode no more
+than limit + 1 bytes from a fresh stream, or size-check the raw body already
+cached by Rails before scanning it. Reject nonfinite parsed numbers, unsafe
+integral numeric values and non-JSON Ruby outputs. Minimum-limit validation,
+exact-limit/overflow and output limits are acceptance tests. An output outside
+the profile becomes a safe internal error, never partial success.
 
 Alternative: implement all native serializer IDs and GET query envelopes.
 Deferred: these increase untrusted parsing and cross-language coercion scope
@@ -162,7 +246,14 @@ nonempty stable strings, their statuses must be 400..599 and their data must
 have a supported schema. The application raises an `OrpcRails::Error` helper
 with code, public message and data; only a matching declaration with validated
 data can set `defined: true`. Invalid error data or undeclared raised codes
-become internal errors rather than invented typed outcomes.
+become internal errors rather than invented typed outcomes. The helper takes
+`code`, public `message` and `data`; HTTP status comes only from its registered
+integer status, not a per-raise override. For example:
+
+```ruby
+raise OrpcRails::Error.new("CONFLICT",
+  message: "Widget already exists", data: { "name" => input.fetch("name") })
+```
 
 Gem-generated failures use `defined: false`, safe code/message and consistent
 HTTP/envelope status: malformed envelope/input or unsupported metadata ->
@@ -172,13 +263,19 @@ HTTP/envelope status: malformed envelope/input or unsupported metadata ->
 unexpected handler/output/error-data failure -> `INTERNAL_SERVER_ERROR`/500.
 Undefined protocol errors include `data: {}`, including internal errors,
 and contain no exception text or stack. These are protocol errors, not
-declared business errors. Test the exact default client's error decoding;
-additional codes need no inference from an exception class.
+declared business errors. Exact pinned-client tests confirm `defined` and
+`status` are literal v1 members. `data` is optional in the upstream decoder;
+explicit `{}` for undefined errors is this gem's policy, not an upstream
+mandatory field. The client trusts envelope status and `defined`; it does not
+verify status agreement or declaration/data validity for the Ruby server.
+The gem must enforce those checks itself. Additional codes need no inference
+from an exception class.
 
 Do not globally wrap exceptions or responses from Rails callbacks. A normal
 callback's denial remains application-controlled and the RPC client call
-rejects. Applications wanting typed auth errors can deliberately use declared
-procedure errors in their own auth integration; the gem does not infer them.
+rejects. Merely raising the helper from a Rails callback does not enter the
+handler codec. Typed authorization errors can be raised deliberately within
+the allowed procedure/context phase; the gem does not infer them from denials.
 
 Alternative: map ActiveRecord exceptions globally or return HTTP 200 with an
 error field. Rejected: both change Rails behavior and obscure the client's
@@ -223,13 +320,24 @@ No data migration or deployment service is required. Keep JS/Ruby compatibility
 fixtures synchronized; do not upgrade to v2 implicitly. Archive only after
 implementation/acceptance, never because planning artifacts are complete.
 
-## Open Questions
+## Implementation Gates
 
-- Prove exact v1 envelope/error behavior with the pinned official client before
-  codec implementation, including omitted metadata and null output.
-- Verify standard-library duplicate-key detection and byte/depth-limit behavior
-  under the selected Ruby/Rails middleware stack; this blocks accepting the
-  codec implementation, not drafting the requirements.
+The default-client wire oracle and parser/lifecycle probes are now executable
+in `test/fixtures/client/rpc-compatibility.test.ts` and
+`test/fixtures/rails/rpc_prerequisites_test.rb`. The first uses real loopback
+HTTP with scripted responses and handwritten contracts; the second uses
+probe controllers through Rails. Neither implements or accepts a gem RPC
+server, generated procedure contracts or a secure duplicate-key scanner.
+
+Still blocking product implementation acceptance:
+
+- Bounded strict lexical prepass, byte/depth/error bounds and encoding tests.
+- Ruby/Zod conformance over every shared node within the admitted wire profile.
+- The first generated-contract procedure round trip against the installed gem,
+  then declared-error, callback/CSRF, context and export-only regression cases.
+
+Use red/green tests for those gates; do not mark the procedure change complete
+because prerequisite probes pass.
 
 ## Source Evidence
 
@@ -238,6 +346,12 @@ implementation/acceptance, never because planning artifacts are complete.
 - [v1 contract definitions](https://v1.orpc.dev/docs/contract-first/define-contract)
 - [v1 client errors](https://v1.orpc.dev/docs/client/error-handling)
 - [v2 wire/API migration](https://orpc.dev/docs/migrations/from-v1)
+- [json 3.0.2 source](https://github.com/ruby/json/blob/v3.0.2/lib/json/common.rb)
+- [json 3.0.2 changes](https://github.com/ruby/json/blob/v3.0.2/CHANGES.md)
+
+Exact package evidence is the locked fixture and its executable tests. Zod
+4.6.5 `v4/core/checks.js` uses `codePointLength` for string bounds; this is
+package-source evidence, not an assertion about unversioned documentation.
 
 The v1 references establish the wire boundary; actual fixture tests must prove
 the chosen package patches. They do not establish implementation in this gem.
