@@ -58,6 +58,8 @@ begin
   execute!(rails, ["ruby", "-Ilib", "-e", 'Dir["test/*_test.rb"].sort.each { |file| require_relative file }'])
   execute!(rails, ["ruby", "tasks_test.rb"])
   execute!(rails, ["ruby", "rpc_prerequisites_test.rb"])
+  execute!(rails, ["ruby", "rpc_dispatch_test.rb"])
+  execute!(rails, ["ruby", "unmounted_test.rb"])
   first = execute!(rails, ["ruby", "-r./app", "-e", 'print OrpcRails::Exporter.new(routes: Rails.application.routes).generate'])
   second = execute!(rails, ["ruby", "-r./app", "-e", 'print OrpcRails::Exporter.new(routes: Rails.application.routes).generate'])
   raise "Generated contracts differ between fresh processes" unless first == second
@@ -77,6 +79,10 @@ begin
   client.start
   network.connect(client._id)
   client.store_file("/fixture/contract.ts", first)
+  rpc_source = execute!(rails, ["ruby", "-r./app", "-e", 'print OrpcRails::RpcExporter.new(controller: "RpcFixtureController").generate'])
+  client.store_file("/fixture/rpc-contract.ts", rpc_source)
+  conformance = execute!(rails, ["ruby", "schema_conformance.rb"])
+  client.store_file("/fixture/schema-conformance.ts", conformance)
   execute!(client, %w[npm run compatibility])
   execute!(client, %w[npm run rpc:compatibility])
   execute!(client, %w[npm test])

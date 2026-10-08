@@ -10,6 +10,14 @@ module OrpcRails
   class Exporter
     RESERVED = %w[then bind call apply valueOf toString toJSON __proto__ constructor prototype].freeze
 
+    def self.router_segments(key)
+      segments = key.split(".", -1)
+      unless segments.all? { |part| part.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/) && !RESERVED.include?(part) }
+        raise ArgumentError, "#{key}: invalid or reserved router key"
+      end
+      segments
+    end
+
     def initialize(routes:, endpoints: nil)
       @routes = Routes.new(routes)
       @endpoints = endpoints
@@ -23,21 +31,8 @@ module OrpcRails
         mapping = HttpMapping.new(endpoint)
         mapping.validate!
         @routes.validate!(endpoint)
-        segments = endpoint.key.split(".", -1)
-        unless segments.all? { |key| key.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/) && !RESERVED.include?(key) }
-          raise ArgumentError, "#{endpoint.key}: invalid or reserved router key"
-        end
-        branch = tree
-        segments.each_with_index do |key, index|
-          if index == segments.size - 1
-            raise ArgumentError, "#{endpoint.key}: duplicate or prefix-colliding router key" if branch.key?(key)
-            branch[key] = "oc.route(#{JSON.generate(mapping.route)}).input(schemas[#{quote(endpoint.key)}].input).output(schemas[#{quote(endpoint.key)}].output)"
-          else
-            branch[key] ||= {}
-            raise ArgumentError, "#{endpoint.key}: prefix-colliding router key" unless branch[key].is_a?(Hash)
-            branch = branch[key]
-          end
-        end
+        insert(tree, endpoint.key,
+          "oc.route(#{JSON.generate(mapping.route)}).input(schemas[#{quote(endpoint.key)}].input).output(schemas[#{quote(endpoint.key)}].output)")
         schema_lines << "  #{quote(endpoint.key)}: { input: #{endpoint.input.to_zod}, output: #{endpoint.output.to_zod} }"
       end
       [
@@ -72,6 +67,21 @@ module OrpcRails
     end
 
     private
+
+    def insert(tree, router_key, expression)
+      segments = self.class.router_segments(router_key)
+      branch = tree
+      segments.each_with_index do |key, index|
+        if index == segments.size - 1
+          raise ArgumentError, "#{router_key}: duplicate or prefix-colliding router key" if branch.key?(key)
+          branch[key] = expression
+        else
+          branch[key] ||= {}
+          raise ArgumentError, "#{router_key}: prefix-colliding router key" unless branch[key].is_a?(Hash)
+          branch = branch[key]
+        end
+      end
+    end
 
     def quote(value)
       JSON.generate(value, ascii_only: true)

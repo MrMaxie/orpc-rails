@@ -15,6 +15,11 @@ module OrpcRails
       @mutex.synchronize { @controllers |= [name.dup.freeze] }
     end
 
+    def controller(name)
+      registered = @mutex.synchronize { @controllers.include?(name) }
+      registered ? resolve(name) : nil
+    end
+
     def endpoints
       names = @mutex.synchronize { @controllers.dup }
       names.flat_map do |name|

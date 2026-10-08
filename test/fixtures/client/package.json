@@ -6,7 +6,7 @@
     "typecheck": "tsc --noEmit",
     "rpc:compatibility": "tsc --project tsconfig.rpc.json && node --experimental-strip-types --test rpc-compatibility.test.ts",
     "compatibility": "tsc --project tsconfig.compatibility.json && node --experimental-strip-types --test compatibility.test.ts",
-    "test": "npm run typecheck && node --experimental-strip-types --test client.test.ts"
+    "test": "npm run typecheck && node --experimental-strip-types --test client.test.ts rpc-client.test.ts"
   },
   "dependencies": {
     "@orpc/client": "1.15.5",

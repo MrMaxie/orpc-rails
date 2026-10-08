@@ -76,6 +76,58 @@ class SchemaController < ActionController::API
   end
 end
 
+class RpcFixtureController < ActionController::API
+  include OrpcRails::Procedures
+  wrap_parameters false
+  S = OrpcRails::Schema
+  class_attribute :handler_calls, default: 0
+  class_attribute :context_calls, default: 0
+  before_action :authenticate
+  before_action :read_parameters_when_requested
+  orpc_limits max_body_bytes: 1024, max_nesting: 6
+
+  orpc_procedure "widgets.echo",
+    input: S.object(name: S.string(min_length: 1, max_length: 20),
+      note: S.string.nullable, nickname: S.string(max_length: 1).optional),
+    output: S.object(id: S.string, name: S.string, note: S.string.nullable,
+      nickname: S.string.optional) do |input:, context:|
+    self.class.handler_calls += 1
+    raise "simulated-secret" if input.fetch("name") == "explode"
+    next { "id" => "broken" } if input.fetch("name") == "broken"
+    next { "id" => "huge", "name" => "x" * 2048, "note" => nil } if input.fetch("name") == "oversized"
+    { "id" => context.fetch(:id) }.merge(input)
+  end
+
+  orpc_procedure "probe.nullOutput", input: S.object, output: S.literal(nil) do
+    nil
+  end
+
+  orpc_procedure "widgets.create", input: S.object(name: S.string), output: S.literal(nil),
+    errors: { "CONFLICT" => { status: 409, data: S.object(name: S.string) } } do |input:, **|
+    name = input.fetch("name")
+    code = name == "undeclared" ? "UNKNOWN" : "CONFLICT"
+    data = name == "invalid-error" ? {} : { "name" => name }
+    message = name == "huge-error" ? "x" * 2048 : "Widget already exists"
+    raise OrpcRails::Error.new(code, message: message, data: data)
+  end
+
+  private
+
+  def read_parameters_when_requested
+    params if request.headers["x-fixture-params"] == "read"
+  end
+
+  def orpc_context
+    self.class.context_calls += 1
+    { id: request.headers["x-fixture-id"] || "9007199254740993" }
+  end
+
+  def authenticate
+    return if request.headers["x-fixture-token"] == "test-token"
+    render json: { error: "Unauthorized" }, status: :unauthorized
+  end
+end
+
 FixtureApplication.initialize!
 Rails.application.routes.draw do
   get "/health", to: ->(_) { [200, { "content-type" => "application/json" }, ['{"ok":true}']] }
@@ -83,6 +135,10 @@ Rails.application.routes.draw do
   get "/widgets/:id", to: "widgets#show"
   post "/widgets", to: "widgets#create"
   delete "/widgets/:id", to: "widgets#destroy"
+  unless ENV["ORPC_FIXTURE_MOUNT_RPC"] == "false"
+    match "/rpc", to: "rpc_fixture#orpc_dispatch", via: :all, format: false
+    match "/rpc/*orpc_path", to: "rpc_fixture#orpc_dispatch", via: :all, format: false
+  end
 end
 
 if $PROGRAM_NAME == __FILE__
