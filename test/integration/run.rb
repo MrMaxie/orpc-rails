@@ -57,6 +57,7 @@ begin
   execute!(rails, ["ruby", "-e", 'require "fileutils"; require "rubygems"; FileUtils.ln_s(Gem::Specification.find_by_name("orpc-rails").full_gem_path + "/lib", "/fixture/lib")'])
   execute!(rails, ["ruby", "-Ilib", "-e", 'Dir["test/*_test.rb"].sort.each { |file| require_relative file }'])
   execute!(rails, ["ruby", "tasks_test.rb"])
+  execute!(rails, ["ruby", "rpc_prerequisites_test.rb"])
   first = execute!(rails, ["ruby", "-r./app", "-e", 'print OrpcRails::Exporter.new(routes: Rails.application.routes).generate'])
   second = execute!(rails, ["ruby", "-r./app", "-e", 'print OrpcRails::Exporter.new(routes: Rails.application.routes).generate'])
   raise "Generated contracts differ between fresh processes" unless first == second
@@ -77,6 +78,7 @@ begin
   network.connect(client._id)
   client.store_file("/fixture/contract.ts", first)
   execute!(client, %w[npm run compatibility])
+  execute!(client, %w[npm run rpc:compatibility])
   execute!(client, %w[npm test])
   puts "Packaged Rails/oRPC integration passed"
 ensure

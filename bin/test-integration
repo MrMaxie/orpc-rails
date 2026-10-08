@@ -43,7 +43,7 @@ begin
   Dir.mktmpdir("orpc-integration-") do |temp|
     client = File.join(temp, "client")
     FileUtils.mkdir_p(client)
-    %w[Dockerfile package.json package-lock.json tsconfig.json tsconfig.compatibility.json compatibility.test.ts client.test.ts].each do |file|
+    %w[Dockerfile package.json package-lock.json tsconfig.json tsconfig.compatibility.json tsconfig.rpc.json compatibility.test.ts rpc-compatibility.test.ts client.test.ts].each do |file|
       copy("test/fixtures/client/#{file}", client)
     end
     client_image = "orpc-rails-test-client:#{run_id}"
@@ -67,6 +67,7 @@ begin
       copy("test/fixtures/rails/Dockerfile", rails)
       copy("test/fixtures/rails/app.rb", rails)
       copy("test/fixtures/rails/tasks_test.rb", rails)
+      copy("test/fixtures/rails/rpc_prerequisites_test.rb", rails)
       copy("test/fixtures/rails/Gemfile.#{target}", rails, "Gemfile")
       copy("test/fixtures/rails/Gemfile.#{target}.lock", rails, "Gemfile.lock")
       rails_image = "orpc-rails-test-#{target}:#{run_id}"
