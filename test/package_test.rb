@@ -38,7 +38,7 @@ class PackageTest < Minitest::Test
         Open3.capture2e(
           { "RUBYOPT" => nil, "RUBYLIB" => nil },
           Gem.ruby, "-I#{dir}/installed/lib", "-e",
-          'require "orpc_rails"; puts OrpcRails::VERSION'
+          'require "orpc_rails"; abort "Missing export API" unless OrpcRails.const_defined?(:Controller) && OrpcRails.const_defined?(:Exporter) && OrpcRails.const_defined?(:Railtie); puts OrpcRails::VERSION'
         )
       end
       assert status.success?, output

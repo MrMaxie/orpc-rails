@@ -1,0 +1,85 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "fileutils"
+require "open3"
+require "securerandom"
+require "tmpdir"
+require "rubygems/package"
+require "bundler"
+
+ROOT = File.expand_path("..", __dir__)
+MATRIX = {
+  "rails72" => "ruby:3.3-bookworm@sha256:b899e7de6ffa6e974d947202d3ce2ac921c12e46c14cff3106214079388dcff4",
+  "rails81" => "ruby:3.4-bookworm@sha256:80259ba83f866aaa43c689e11569dc950b2e508effca0799d50608f7c4ca6172"
+}.freeze
+
+# All Docker contexts are explicit copies into OS temporary storage, never the
+# repository root. Only distribution files and selected test fixtures are sent.
+def copy(relative, destination, name = File.basename(relative))
+  FileUtils.cp(File.join(ROOT, relative), File.join(destination, name))
+end
+
+def command!(*args)
+  output, status = Bundler.with_unbundled_env { Open3.capture2e(*args) }
+  raise "#{args.first(2).join(' ')} failed:\n#{output}" unless status.success?
+
+  puts output unless output.empty?
+  output
+end
+
+selected = ARGV.empty? ? MATRIX.keys : ARGV
+abort "Usage: ruby bin/test-integration [rails72|rails81]" unless (selected - MATRIX.keys).empty?
+
+begin
+  command!("docker", "info", "--format", "{{.ServerVersion}}")
+rescue StandardError
+  abort "Docker is unavailable. Start Docker and select a Linux-container context before running integration tests."
+end
+
+images = []
+run_id = SecureRandom.hex(6)
+begin
+  Dir.mktmpdir("orpc-integration-") do |temp|
+    client = File.join(temp, "client")
+    FileUtils.mkdir_p(client)
+    %w[Dockerfile package.json package-lock.json tsconfig.json tsconfig.compatibility.json compatibility.test.ts client.test.ts].each do |file|
+      copy("test/fixtures/client/#{file}", client)
+    end
+    client_image = "orpc-rails-test-client:#{run_id}"
+    images << client_image
+    command!("docker", "build", "-q", "-t", client_image, client)
+
+    runner = File.join(temp, "runner")
+    FileUtils.mkdir_p(File.join(runner, "test"))
+    %w[Dockerfile Gemfile Gemfile.lock run.rb].each { |file| copy("test/integration/#{file}", runner) }
+    %w[orpc-rails.gemspec LICENSE README.md CHANGELOG.md].each { |file| copy(file, runner) }
+    Dir[File.join(ROOT, "test/*_test.rb")].each { |file| FileUtils.cp(file, File.join(runner, "test")) }
+    spec = Gem::Specification.load(File.join(ROOT, "orpc-rails.gemspec"))
+    Dir.chdir(ROOT) { Gem::Package.build(spec, false, false, File.join(runner, "orpc-rails.gem")) }
+    runner_image = "orpc-rails-test-runner:#{run_id}"
+    images << runner_image
+    command!("docker", "build", "-q", "-t", runner_image, runner)
+
+    selected.each do |target|
+      rails = File.join(temp, target)
+      FileUtils.mkdir_p(rails)
+      copy("test/fixtures/rails/Dockerfile", rails)
+      copy("test/fixtures/rails/app.rb", rails)
+      copy("test/fixtures/rails/Gemfile.#{target}", rails, "Gemfile")
+      copy("test/fixtures/rails/Gemfile.#{target}.lock", rails, "Gemfile.lock")
+      rails_image = "orpc-rails-test-#{target}:#{run_id}"
+      images << rails_image
+      command!("docker", "build", "-q", "--build-arg", "RUBY_IMAGE=#{MATRIX.fetch(target)}",
+        "-t", rails_image, rails)
+      puts "Testing #{target} against the packaged gem"
+      command!("docker", "run", "--rm", "--mount", "type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock",
+        "--add-host", "host.docker.internal:host-gateway", "-e", "TC_HOST=host.docker.internal",
+        "-e", "RAILS_IMAGE=#{rails_image}", "-e", "CLIENT_IMAGE=#{client_image}", runner_image)
+    end
+  end
+ensure
+  images.reverse_each do |image|
+    Bundler.with_unbundled_env { Open3.capture2e("docker", "image", "rm", image) }
+  end
+end

@@ -9,6 +9,8 @@
 /spec/reports/
 /spec/examples.txt
 /test/tmp/
+/test/fixtures/client/node_modules/
+/test/fixtures/client/contract.ts
 /test/version_tmp/
 /tmp/
 
