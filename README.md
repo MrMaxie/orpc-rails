@@ -3,6 +3,8 @@
 Export existing Rails JSON endpoints as executable Zod schemas and typed
 [oRPC v1](https://v1.orpc.dev) contracts. Call them from TypeScript with the
 official `OpenAPILink` client; keep your controllers, callbacks and responses.
+For procedure-style handling, opt into a separate Rails controller and use
+`RPCLink` instead.
 
 ## Add to Rails
 
@@ -125,6 +127,90 @@ potentially shadowed routes are rejected instead of guessed. Router keys must
 be dotted identifiers without duplicates, prefix collisions or reserved
 JavaScript/oRPC segments.
 
+## Optional procedures with RPCLink
+
+Use a dedicated controller; conventional endpoint exports remain independent:
+
+```ruby
+class RpcController < ApplicationController
+  include OrpcRails::Procedures
+  wrap_parameters false
+  # Keep your application's authentication/authorization callbacks here.
+  S = OrpcRails::Schema
+
+  orpc_procedure "widgets.echo",
+    input: S.object(name: S.string), output: S.object(name: S.string),
+    errors: { "CONFLICT" => { status: 409, data: S.object(name: S.string) } } do |input:, **|
+    if input.fetch("name") == "taken"
+      raise OrpcRails::Error.new("CONFLICT",
+        message: "Name already taken", data: { "name" => "taken" })
+    end
+    input
+  end
+end
+
+# config/routes.rb — application-owned prefix
+match "/rpc", to: "rpc#orpc_dispatch", via: :all, format: false
+match "/rpc/*orpc_path", to: "rpc#orpc_dispatch", via: :all, format: false
+```
+
+Only POST invokes a procedure; the catch routes allow the adapter to return
+405 for other methods after application callbacks allow dispatch. Including
+the concern never mounts routes or disables Rails security policy.
+
+Export one named, registered controller to a separate module:
+
+```sh
+bundle exec rake 'orpc:export_rpc[frontend/src/rpc-contract.ts,RpcController]'
+bundle exec rake 'orpc:check_rpc[frontend/src/rpc-contract.ts,RpcController]'
+```
+
+These tasks do not execute handlers or context builders. HTTP export/check
+tasks remain HTTP-only, so the same key may exist in both separate modules.
+
+```ts
+import { createORPCClient } from '@orpc/client'
+import { RPCLink } from '@orpc/client/fetch'
+import type { ContractRouterClient } from '@orpc/contract'
+import { contract, schemas } from './rpc-contract'
+
+const client: ContractRouterClient<typeof contract> = createORPCClient(
+  new RPCLink({ url: 'http://localhost:3000/rpc' })
+)
+const input = schemas['widgets.echo'].input.parse({ name: 'blue' })
+const result = await client.widgets.echo(input)
+```
+
+Configure authentication headers or cookie/CSRF options for your application.
+The adapter validates input before building context or invoking the handler,
+and validates output before sending success. Handler hashes must have string
+keys. Missing optional properties stay omitted; use `S.literal(nil)` for an
+explicit null output and `S.object` for empty-object input. Override the private
+`orpc_context` method to supply request-local application context; handlers
+receive it as the `context:` keyword, never in exported contracts.
+
+Raised declared errors retain their registered status and schema-valid data;
+the official client's `isDefinedError` recognizes them. Unexpected exceptions,
+invalid outputs and undeclared/invalid business errors become safe undefined
+500 errors. Callback, middleware and CSRF denials before dispatch remain
+Rails/application-owned, not automatically converted to typed RPC errors.
+
+The supported RPC profile is oRPC v1, POST and plain JSON only. Native-type
+metadata, file maps, root undefined, batching and streaming are not supported.
+Raw/decoded text must be valid UTF-8; string bounds match the pinned Zod's
+Unicode code-point counts, without normalization. RPC additionally rejects
+nonfinite numbers and integral values outside the JavaScript safe range;
+use strings for larger IDs/decimals. This wire policy does not change HTTP
+schema exports. RPCLink's static types do not validate input at runtime: parse
+it on the client when needed, especially before serialization can turn Infinity
+into JSON null.
+
+Defaults are 1 MiB for the complete wire envelope and 64 container levels,
+including its outer object. Configure the dedicated controller with
+`orpc_limits max_body_bytes: 1_048_576, max_nesting: 64` (minimum 1024 bytes
+and 3 levels). The limits bound the gem's codec, not earlier Rails parameter
+parsing; deployment request limits remain application-owned.
+
 ## Tested compatibility
 
 The packaged gem, generated TypeScript and real HTTP calls are tested on
@@ -137,7 +223,9 @@ Linux containers with these pairs:
 
 The client fixture pins oRPC 1.15.5, Zod 4.6.5, TypeScript 5.9.3 and Node
 24.18.0. Use the v1 documentation; current oRPC v2 APIs are not this
-compatibility target. The optional RPCLink/procedure API is not implemented.
+compatibility target. Both conventional OpenAPILink calls and generated-contract
+RPCLink echo/null/declared-error calls run against the installed gem. The gem
+remains unpublished; these tests do not claim full oRPC transport parity.
 
 ## Development
 

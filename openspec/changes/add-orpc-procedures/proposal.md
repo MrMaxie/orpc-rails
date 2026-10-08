@@ -32,14 +32,15 @@ None. This adds an optional layer without changing export-only requirements.
 Depends on [export-rails-contracts](../export-rails-contracts/proposal.md)
 for schemas, registry, generator and the gem/Testcontainers harness.
 That baseline now passes packaged-gem acceptance on both locked Rails targets.
-The executable prerequisite gates probe pinned wire/parser/lifecycle behavior;
-they do not implement a gem RPC server. The next implementation gate is bounded
-strict JSON scanning, followed by one generated-contract procedure in TDD.
+Prerequisite gates remain wire/parser/lifecycle probes, separate from actual
+product acceptance. The implemented codec, runtime validation and selected
+procedure exporter now pass installed-gem echo/null/declared-error acceptance
+with generated contracts on both locked targets; tasks.md records coverage.
 
 Adds Ruby procedure/controller integration and a codec for the JSON subset of
 stable oRPC v1. Generated procedure contracts use the same Zod/oRPC imports;
 clients additionally use `@orpc/client/fetch` for `RPCLink`.
 No new Ruby runtime dependency, Node service or database is required.
 
-This is a proposed second slice, not implemented behavior or full support for
-all oRPC transports, serializers and plugins.
+This optional second slice remains an unarchived change, not a published
+release or full support for all oRPC transports, serializers and plugins.

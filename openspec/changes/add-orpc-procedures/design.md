@@ -3,8 +3,10 @@
 This change depends on the schema representation, registry/exporter and
 packaged-gem Testcontainers fixture from `export-rails-contracts`.
 The export-only baseline is implemented and its packaged-gem acceptance passes
-on both locked Rails targets. Procedures are not implemented. This document
-proposes the optional second slice; conventional contracts remain usable alone.
+on both locked Rails targets. The optional procedure slice now implements
+bounded dispatch, validation and separate contract export; installed-gem echo,
+null and declared-error calls pass both targets. Conventional contracts remain
+usable alone. Implementation evidence lives in tasks.md; no release is implied.
 
 An ergonomic Ruby procedure DSL is not sufficient for compatibility with
 RPCLink: the route, serialization envelope, HTTP errors and typed error shape
@@ -31,7 +33,7 @@ must match the chosen oRPC version.
 ### 1. Reuse the schema IR and add optional handlers
 
 A controller concern supplies procedure declarations using the same immutable
-schemas as export-only declarations. Proposed API shape:
+schemas as export-only declarations. API shape:
 
 ```ruby
 class RpcController < ApplicationController
@@ -175,7 +177,8 @@ ambiguity. Use a bounded standard-library `StringScanner` lexical prepass
 tracking object keys after escape decoding, structural depth and valid JSON
 tokens, followed by ordinary parsing. It must reject escaped-equivalent keys,
 comments, invalid escapes and trailing commas, not build a permissive JSONC
-reader. The scanner still needs implementation and adversarial tests.
+reader. `StrictJson` implements this iterative prepass; the codec unit suite
+and full-stack rejection cases verify it on both locked JSON versions.
 
 The locked matrix exposes incompatible parser conveniences: json 2.7.2 calls
 `object_class#[]=` for both duplicate members but ignores
@@ -320,24 +323,24 @@ No data migration or deployment service is required. Keep JS/Ruby compatibility
 fixtures synchronized; do not upgrade to v2 implicitly. Archive only after
 implementation/acceptance, never because planning artifacts are complete.
 
-## Implementation Gates
+## Implementation Verification
 
-The default-client wire oracle and parser/lifecycle probes are now executable
-in `test/fixtures/client/rpc-compatibility.test.ts` and
-`test/fixtures/rails/rpc_prerequisites_test.rb`. The first uses real loopback
-HTTP with scripted responses and handwritten contracts; the second uses
-probe controllers through Rails. Neither implements or accepts a gem RPC
-server, generated procedure contracts or a secure duplicate-key scanner.
+Keep prerequisite oracles separate from product acceptance:
+`rpc-compatibility.test.ts` uses handwritten contracts and scripted loopback
+HTTP, and `rpc_prerequisites_test.rb` uses Rails probe controllers. Those
+results alone never establish a working gem RPC server.
 
-Still blocking product implementation acceptance:
+Product acceptance now uses `rpc-client.test.ts` with generated contracts
+against the installed gem, `rpc_dispatch_test.rb` through the actual Rails
+stack, and `unmounted_test.rb` for export-only behavior without an RPC route.
+`schema_conformance.rb` generates paired Ruby/Zod cases over all shared nodes;
+`rpc_codec_test.rb` covers strict scanning and input/output resource bounds.
+The combined Testcontainers matrix passes both locked Ruby/Rails/JSON targets.
 
-- Bounded strict lexical prepass, byte/depth/error bounds and encoding tests.
-- Ruby/Zod conformance over every shared node within the admitted wire profile.
-- The first generated-contract procedure round trip against the installed gem,
-  then declared-error, callback/CSRF, context and export-only regression cases.
-
-Use red/green tests for those gates; do not mark the procedure change complete
-because prerequisite probes pass.
+Regression cases cover absolute REQUEST_URI values, trailing empty segments
+and arbitrary Ruby equality hooks: Boolean validation checks exact types,
+not overridable equality. Complete review and acceptance before separately
+archiving; implementation checks do not authorize a release, tag or publication.
 
 ## Source Evidence
 
